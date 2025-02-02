@@ -1,245 +1,64 @@
-# Importing essential libraries and modules
-
-from flask import Flask, render_template, request
-import numpy as np
-import pandas as pd
-# from utils.disease import disease_dic
-# from utils.fertilizer import fertilizer_dic
-import requests
-import config
-import pickle
-import io
-# import torch
-# from torchvision import transforms
+from flask import Flask, request, render_template, url_for
+import os
+from tensorflow.keras.models import load_model
 from PIL import Image
-# from utils.model import ResNet9
-import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-from warnings import filterwarnings
-filterwarnings('ignore')
-# Load ML model
-forest = pickle.load(open('models/yield_rf.pkl', 'rb'))  # yield
-cp = pickle.load(open('models/forest.pkl', 'rb'))  # price
-# ==============================================================================================
-model = pickle.load(open('models/classifier.pkl','rb'))
-ferti = pickle.load(open('models/fertilizer.pkl','rb'))
-
-
-# Loading crop recommendation model
-
-
-cr = pickle.load(open('models/RandomForest.pkl', 'rb'))
-
-
-# =========================================================================================
-
-# Custom functions for calculations
-
-
-def weather_fetch(city_name):
-    """
-    Fetch and returns the temperature and humidity of a city
-    :params: city_name
-    :return: temperature, humidity
-    """
-    api_key = config.weather_api_key
-    base_url = "http://api.openweathermap.org/data/2.5/weather?"
-
-    complete_url = base_url + "appid=" + api_key + "&q=" + city_name
-    response = requests.get(complete_url)
-    x = response.json()
-    print('vgj,hDS|m n')
-    print(response)
-
-    if x["cod"] != "404":
-        y = x["main"]
-
-        temperature = round((y["temp"] - 273.15), 2)
-        humidity = y["humidity"]
-        return temperature, humidity
-    else:
-        return None
-
-
-
-
-# ===============================================================================================
-# ------------------------------------ FLASK APP -------------------------------------------------
-
 
 app = Flask(__name__)
 
-# render home page
+# Load your model
+model = load_model('model.h5')
 
+# Define the class labels
+class_labels = ['Healthy', 'Powdery', 'Rusty']
 
-@ app.route('/')
-def home():
-    title = 'Crop harvest'
-    return render_template('index.html', title=title)
+# Define remedies for diseases
+disease_remedies = {
+    'Powdery': "Apply fungicides containing sulfur or potassium bicarbonate. Ensure proper air circulation around plants. Use a baking soda spray (1 tbsp baking soda, 1/2 tsp liquid soap, 1 gallon water) or neem oil (2 tbsp neem oil in 1 gallon water) weekly. Improve airflow, avoid wet leaves, and remove infected parts promptly.",
+    'Rusty': "Remove infected leaves and apply fungicides containing copper. Avoid overhead watering."
+}
 
-# render crop recommendation form page
+# Preprocessing function for the uploaded image
+def preprocess_image(image, target_size):
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    image = image.resize(target_size)
+    image = np.array(image) / 255.0
+    image = np.expand_dims(image, axis=0)
+    return image
 
+# Home route to display the upload form and result
+@app.route("/", methods=["GET", "POST"])
+def upload_image():
+    if request.method == "POST":
+        if 'file' not in request.files:
+            return "No file part"
+        file = request.files['file']
+        if file.filename == '':
+            return "No selected file"
+        if file:
+            UPLOAD_FOLDER = os.path.join('static', 'uploads')
+            if not os.path.exists(UPLOAD_FOLDER):
+                os.makedirs(UPLOAD_FOLDER)
 
-@ app.route('/crop-recommend')
-def crop_recommend():
-    import requests
-    import pandas as pd
-    data=requests.get("https://api.thingspeak.com/channels/2811793/feeds.json?api_key=KZLTXDRJH360LKAB&results=2")
-    hum=data.json()['feeds'][-1]['field1']
-    moi=data.json()['feeds'][-1]['field2']
-    temp=data.json()['feeds'][-1]['field3']
-    n=data.json()['feeds'][-1]['field4']
-    p=data.json()['feeds'][-1]['field5']
-    k=data.json()['feeds'][-1]['field6']
-    title = 'Crop Recommendation'
-    # , n=n, p=p, k=k, temp=temp)
-    return render_template('crop.html', title=title,n=n,k=k,p=p,temp=temp,hum=hum,moi=moi)
+            file_path = os.path.join(UPLOAD_FOLDER, file.filename)
+            file.save(file_path)
 
-# render fertilizer recommendation form page
+            image = Image.open(file_path)
+            processed_image = preprocess_image(image, target_size=(224, 224))
 
+            prediction = model.predict(processed_image)
+            predicted_class = class_labels[np.argmax(prediction)]
 
-@ app.route('/yeild')
-def yeild():
-    import requests
-    import pandas as pd
-    data=requests.get("https://api.thingspeak.com/channels/2811793/feeds.json?api_key=KZLTXDRJH360LKAB&results=2")
-    hum=data.json()['feeds'][-1]['field1']
-    moi=data.json()['feeds'][-1]['field2']
-    temp=data.json()['feeds'][-1]['field3']
-    n=data.json()['feeds'][-1]['field4']
-    p=data.json()['feeds'][-1]['field5']
-    k=data.json()['feeds'][-1]['field6']
-    title = 'crop yeild prediction'
+            remedy = disease_remedies.get(predicted_class, "No remedies needed for healthy leaves.")
+            return render_template(
+                "upload.html", 
+                image_url=url_for('static', filename='uploads/' + file.filename),
+                predicted_class=predicted_class,
+                remedy=remedy
+            )
 
-    # , temp=temp, hum=hum)
-    return render_template('crop_yeild.html', title=title,n=n,k=k,p=p,temp=temp,hum=hum,moi=moi)
+    return render_template("upload.html")
 
-# render disease prediction input page
-
-
-# ===============================================================================================
-
-# RENDER PREDICTION PAGES
-
-# render crop recommendation result page
-
-
-@ app.route('/crop_predict', methods=['POST'])
-def crop_predict():
-    title = 'Crop Recommended'
-
-    if request.method == 'POST':
-        N = request.form['nitrogen']
-        P = request.form['phosphorous']
-        K = request.form['pottasium']
-        ph = request.form['ph']
-        rainfall = request.form['rainfall']
-        hum = request.form['hum']
-        temp = request.form['temp']
-
-        data = np.array([[N, P, K, temp, hum, ph, rainfall]])
-        my_prediction = cr.predict(data)
-        final_prediction = my_prediction[0]
-
-        return render_template('crop-result.html', prediction=final_prediction, title=title)
-        # else:
-        #     return render_template('try_again.html', title=title)
-# render fertilizer recommendation result page
-
-@app.route('/fer_predict',methods=['POST'])
-def fer_predict():
-    temp = request.form.get('temp')
-    humi = request.form.get('humid')
-    mois = request.form.get('mois')
-    soil = request.form.get('soil')
-    crop = request.form.get('crop')
-    nitro = request.form.get('nitro')
-    pota = request.form.get('pota')
-    phosp = request.form.get('phos')
-    input = [float(temp),float(humi),float(mois),float(soil),float(crop),float(nitro),float(pota),float(phosp)]
-
-    res = ferti.classes_[model.predict([input])]
-
-    return render_template('fer_predict.html',res = res[0])
-@ app.route('/yeild-predict', methods=['POST'])
-def yeild_predict():
-    title = 'yeild predicted'
-
-    if request.method == 'POST':
-        state = request.form['stt']
-        district = request.form['city']
-        year = request.form['year']
-        season = request.form['season']
-        crop = request.form['crop']
-        Temperature = request.form['Temperature']
-        humidity = request.form['humidity']
-        soilmoisture = request.form['soilmoisture']
-        area = request.form['area']
-
-        out_1 = forest.predict([[float(state),
-                                 float(district),
-                                 float(year),
-                                 float(season),
-                                 float(crop),
-                                 float(Temperature),
-                                 float(humidity),
-                                 float(soilmoisture),
-                                 float(area)]])
-        print("the yield is --->   {}    tons".format(out_1[0]))
-        out_yield="{:.2f}".format(out_1[0])
-
-
-        return render_template('yeild_prediction.html', prediction=out_yield, title=title)
-
-    return render_template('try_again.html', title=title)
-
-
-# render disease prediction result page
-
-
-@app.route('/crop_price', methods=['GET', 'POST'])
-def crop_price():
-    # return "this is crop prediction page"
-    title = 'crop price'
-    return render_template('crop_price.html', title=title)
-
-@app.route('/crop_fer', methods=['GET', 'POST'])
-def crop_fer():
-    import requests
-    import pandas as pd
-    data=requests.get("https://api.thingspeak.com/channels/2811793/feeds.json?api_key=KZLTXDRJH360LKAB&results=2")
-    hum=data.json()['feeds'][-1]['field1']
-    moi=data.json()['feeds'][-1]['field2']
-    temp=data.json()['feeds'][-1]['field3']
-    n=data.json()['feeds'][-1]['field4']
-    p=data.json()['feeds'][-1]['field5']
-    k=data.json()['feeds'][-1]['field6']
-    # return "this is crop prediction page"
-    title = 'crop Fertilizer'
-    return render_template('fer.html', title=title,n=n,k=k,p=p,temp=temp,hum=hum,moi=moi)
-
-
-@ app.route('/price_predict', methods=['POST'])
-def price_predict():
-    title = 'price Suggestion'
-    if request.method == 'POST':
-        state = int(request.form['stt'])
-        district = int(request.form['city'])
-        year = int(request.form['year'])
-        season = int(request.form['season'])
-        crop = int(request.form['crop'])
-
-        p_result = cp.predict([[float(state),
-                                float(district),
-                                float(year),
-                                float(season),
-                                float(crop)]])
-
-        return render_template('price_prediction.html', title=title, p_result=p_result)
-    return render_template('try_again.html', title=title)
-
-
-# ===============================================================================================
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(debug=True)
